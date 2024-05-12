@@ -9,14 +9,10 @@ pub struct Context {
 
 impl Context {
     pub fn new() -> Self {
-        let ctx = unsafe { raw::nix_c_context_create() };
-        if ctx.is_null() {
-            panic!("nix_c_context_create returned a null pointer");
+        Context {
+            inner: NonNull::new(unsafe { raw::nix_c_context_create() })
+                .expect("nix_c_context_create returned a null pointer"),
         }
-        let ctx = Context {
-            inner: NonNull::new(ctx).unwrap(),
-        };
-        ctx
     }
     pub fn ptr(&self) -> *mut raw::nix_c_context {
         self.inner.as_ptr()
@@ -27,7 +23,7 @@ impl Context {
             // msgp is a borrowed pointer, so we don't need to free it
             let msgp = unsafe { raw::nix_err_msg(null_mut(), self.inner.as_ptr(), null_mut()) };
             // Turn the i8 pointer into a Rust string by copying
-            let msg: &str = unsafe { core::ffi::CStr::from_ptr(msgp).to_str()? };
+            let msg: &str = unsafe { core::ffi::CStr::from_ptr(msgp) }.to_str()?;
             bail!("{}", msg);
         }
         Ok(())
@@ -40,9 +36,7 @@ impl Context {
 
 impl Drop for Context {
     fn drop(&mut self) {
-        unsafe {
-            raw::nix_c_context_free(self.inner.as_ptr());
-        }
+        unsafe { raw::nix_c_context_free(self.inner.as_ptr()) }
     }
 }
 

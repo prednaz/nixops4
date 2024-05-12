@@ -13,15 +13,15 @@ impl StorePath {
         StorePath { raw }
     }
     pub fn name(&self) -> Result<String> {
+        let mut vec = Vec::new();
         unsafe {
-            let mut vec = Vec::new();
             raw::nix_store_path_name(
                 self.raw,
                 Some(callback_get_vec_u8),
                 callback_get_vec_u8_data(&mut vec),
             );
-            String::from_utf8(vec).map_err(|e| e.into())
         }
+        String::from_utf8(vec).map_err(|e| e.into())
     }
 }
 impl Drop for StorePath {

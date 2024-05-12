@@ -42,31 +42,24 @@ pub struct Store {
 impl Store {
     pub fn open(url: &str) -> Result<Self> {
         let x = INIT.as_ref();
-        match x {
-            Ok(_) => {}
-            Err(e) => {
-                // Couldn't just clone the error, so we have to print it here.
-                bail!("nix_libstore_init error: {}", e);
-            }
+        if let Err(e) = x {
+            // Couldn't just clone the error, so we have to print it here.
+            bail!("nix_libstore_init error: {}", e);
         }
 
         let context: Context = Context::new();
-
-        let uri_ptr = CString::new(url)?;
         let store = unsafe {
             raw::nix_store_open(
                 context.ptr(),
-                uri_ptr.as_ptr(),
+                CString::new(url)?.as_ptr(),
                 null_mut::<*mut *const i8>(),
             )
         };
         context.check_err()?;
-        if store.is_null() {
-            bail!("nix_c_store_open returned a null pointer");
-        }
+
         let store = Store {
             inner: StoreRef {
-                inner: NonNull::new(store).unwrap(),
+                inner: NonNull::new(store).expect("nix_c_store_open returned a null pointer"),
             },
             context,
         };

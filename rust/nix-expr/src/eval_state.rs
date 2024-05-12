@@ -1,6 +1,6 @@
 use crate::value::{Int, Value, ValueType};
 use anyhow::Context as _;
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use lazy_static::lazy_static;
 use nix_c_raw as raw;
 use nix_store::path::StorePath;
@@ -25,8 +25,7 @@ lazy_static! {
         unsafe {
             raw::nix_libexpr_init(context.ptr());
         }
-        context.check_err()?;
-        Ok(())
+        context.check_err()
     };
 }
 pub fn init() -> Result<()> {
@@ -35,7 +34,7 @@ pub fn init() -> Result<()> {
         Ok(_) => Ok(()),
         Err(e) => {
             // Couldn't just clone the error, so we have to print it here.
-            Err(anyhow::format_err!("nix_libstore_init error: {}", e))
+            Err(anyhow!("nix_libstore_init error: {}", e))
         }
     }
 }
@@ -79,10 +78,8 @@ impl EvalState {
         &self.store
     }
     pub fn eval_from_string(&self, expr: &str, path: &str) -> Result<Value> {
-        let expr_ptr =
-            CString::new(expr).with_context(|| "eval_from_string: expr contains null byte")?;
-        let path_ptr =
-            CString::new(path).with_context(|| "eval_from_string: path contains null byte")?;
+        let expr_ptr = CString::new(expr).context("eval_from_string: expr contains null byte")?;
+        let path_ptr = CString::new(path).context("eval_from_string: path contains null byte")?;
         let value = self.new_value_uninitialized();
         unsafe {
             let ctx_ptr = self.context.ptr();
@@ -104,19 +101,19 @@ impl EvalState {
         }
         self.context.check_err()
     }
-    pub fn value_is_thunk(&self, value: &Value) -> bool {
-        let r = unsafe {
-            raw::nix_get_type(self.context.ptr(), value.raw_ptr()) == raw::ValueType_NIX_TYPE_THUNK
-        };
-        self.context.check_err().unwrap();
-        r
-    }
     pub fn value_type(&self, value: &Value) -> Result<ValueType> {
-        if self.value_is_thunk(value) {
-            self.force(value)?;
-        }
         let r = unsafe { raw::nix_get_type(self.context.ptr(), value.raw_ptr()) };
+        assert!(self.context.check_err().is_ok());
         Ok(ValueType::from_raw(r))
+    }
+    pub fn value_type_forced(&self, value: &Value) -> Result<ValueType> {
+        match self.value_type(value)? {
+            ValueType::Thunk => {
+                self.force(value)?;
+                self.value_type(value)
+            }
+            value_type => Ok(value_type),
+        }
     }
     pub fn require_int(&self, v: &Value) -> Result<Int> {
         let t = self.value_type(v).unwrap();
@@ -133,23 +130,23 @@ impl EvalState {
         if t != ValueType::AttrSet {
             bail!("expected an attrset, but got a {:?}", t);
         }
-        let n = unsafe { raw::nix_get_attrs_size(self.context.ptr(), v.raw_ptr()) as usize };
+        let n = unsafe { raw::nix_get_attrs_size(self.context.ptr(), v.raw_ptr()) };
         self.context.check_err()?;
-        let mut attrs = Vec::with_capacity(n);
+        let mut attrs = Vec::with_capacity(n as usize);
         unsafe {
             for i in 0..n {
-                let cstr_ptr: *const i8 = raw::nix_get_attr_name_byidx(
+                let cstr_ptr = raw::nix_get_attr_name_byidx(
                     self.context.ptr(),
                     v.raw_ptr(),
                     self.raw_ptr(),
-                    i as c_uint,
+                    i,
                 );
                 self.context.check_err()?;
                 let cstr = std::ffi::CStr::from_ptr(cstr_ptr);
-                let s = cstr.to_str().map_err(|e| {
-                    anyhow::format_err!("Nix attrset key is not valid UTF-8: {}", e)
-                })?;
-                attrs.insert(i, s.to_owned());
+                let s = cstr
+                    .to_str()
+                    .map_err(|e| anyhow!("Nix attrset key is not valid UTF-8: {}", e))?;
+                attrs.insert(i as usize, s.to_owned());
             }
         }
         Ok(attrs)
@@ -159,10 +156,11 @@ impl EvalState {
         let r = self.require_attrs_select_opt(v, attr_name)?;
         match r {
             Some(v) => Ok(v),
-            None => self.context.check_err().and_then(|_| {
+            None => {
+                self.context.check_err()?;
                 // should be unreachable
                 bail!("attribute not found: {}", attr_name)
-            }),
+            }
         }
     }
 
@@ -173,7 +171,7 @@ impl EvalState {
             bail!("expected an attrset, but got a {:?}", t);
         }
         let attr_name = CString::new(attr_name)
-            .with_context(|| "require_attrs_select_opt: attrName contains null byte")?;
+            .context("require_attrs_select_opt: attrName contains null byte")?;
         // c_void should be Value; why was void generated?
         let v = unsafe {
             raw::nix_get_attr_byname(
@@ -183,6 +181,7 @@ impl EvalState {
                 attr_name.as_ptr(),
             )
         };
+        // should be in `require_attrs_select` until here, which we can then call here and inspect the `Result` error.
         if self.context.is_key_error() {
             Ok(None)
         } else {
@@ -194,11 +193,10 @@ impl EvalState {
     /// Create a new value containing the passed string.
     /// Returns a string value without any string context.
     pub fn new_value_str(&self, s: &str) -> Result<Value> {
-        let s = CString::new(s).with_context(|| "new_value_str: contains null byte")?;
-        let v = unsafe {
-            let value = self.new_value_uninitialized();
-            raw::nix_init_string(self.context.ptr(), value.raw_ptr(), s.as_ptr());
-            value
+        let s = CString::new(s).context("new_value_str: contains null byte")?;
+        let v = self.new_value_uninitialized();
+        unsafe {
+            raw::nix_init_string(self.context.ptr(), v.raw_ptr(), s.as_ptr());
         };
         self.context.check_err()?;
         Ok(v)
@@ -226,8 +224,7 @@ impl EvalState {
             )
         };
         self.context.check_err()?;
-        String::from_utf8(raw_buffer)
-            .map_err(|e| anyhow::format_err!("Nix string is not valid UTF-8: {}", e))
+        String::from_utf8(raw_buffer).map_err(|e| anyhow!("Nix string is not valid UTF-8: {}", e))
     }
     /// NOTE: this will be replaced by two methods, one that also returns the context, and one that checks that the context is empty
     pub fn require_string(&self, value: &Value) -> Result<String> {
@@ -262,7 +259,7 @@ impl EvalState {
             let size = nix_realised_string_get_buffer_size(rs);
             let slice = std::slice::from_raw_parts(start, size);
             String::from_utf8(slice.to_vec())
-                .map_err(|e| anyhow::format_err!("Nix string is not valid UTF-8: {}", e))?
+                .map_err(|e| anyhow!("Nix string is not valid UTF-8: {}", e))?
         };
 
         let paths = unsafe {
@@ -336,7 +333,7 @@ pub fn gc_register_my_thread() -> Result<()> {
         };
         let r = raw::GC_get_stack_base(&mut sb);
         if r as u32 != raw::GC_SUCCESS {
-            Err(anyhow::format_err!("GC_get_stack_base failed: {}", r))?;
+            Err(anyhow!("GC_get_stack_base failed: {}", r))?;
         }
         raw::GC_register_my_thread(&sb);
         Ok(())
@@ -395,12 +392,12 @@ mod tests {
             let store = Store::open("auto").unwrap();
             let es = EvalState::new(store).unwrap();
             let v = es.eval_from_string("1", "<test>").unwrap();
-            let v2 = v.clone();
+            let v2 = Value::clone(&v);
             es.force(&v).unwrap();
             let t = es.value_type(&v).unwrap();
             assert!(t == ValueType::Int);
             let t2 = es.value_type(&v2).unwrap();
-            assert!(t2 == ValueType::Int);
+            assert!(t2 == ValueType::Int); // assert eq
             gc_now();
         })
         .unwrap();
@@ -508,8 +505,8 @@ mod tests {
                 Ok(_) => panic!("expected an error"),
                 Err(e) => {
                     if !e.to_string().contains("oh no the error") {
-                        eprintln!("unexpected error message: {}", e);
-                        assert!(false);
+                        // guard?
+                        panic!("unexpected error message: {}", e);
                     }
                 }
             }
@@ -546,8 +543,7 @@ mod tests {
                 Ok(_) => panic!("expected an error"),
                 Err(e) => {
                     if !e.to_string().contains("oh no the error") {
-                        eprintln!("unexpected error message: {}", e);
-                        assert!(false);
+                        panic!("unexpected error message: {}", e);
                     }
                 }
             }

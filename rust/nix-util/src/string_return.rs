@@ -2,12 +2,12 @@
 ///
 /// This function is used by the other nix_* crates, and you should never need to call it yourself.
 pub unsafe extern "C" fn callback_get_vec_u8(
-    start: *const ::std::os::raw::c_char,
+    start: *const std::os::raw::c_char,
     n: std::os::raw::c_uint,
     user_data: *mut std::os::raw::c_void,
 ) {
-    let ret = user_data as *mut Vec<u8>;
-    let slice = std::slice::from_raw_parts(start as *const u8, n as usize);
+    let ret: *mut Vec<u8> = user_data.cast();
+    let slice = std::slice::from_raw_parts(start.cast(), n as usize);
     if !(*ret).is_empty() {
         panic!("callback_get_vec_u8: slice must be empty. Were we called twice?");
     }
@@ -15,7 +15,7 @@ pub unsafe extern "C" fn callback_get_vec_u8(
 }
 
 pub fn callback_get_vec_u8_data(vec: &mut Vec<u8>) -> *mut std::os::raw::c_void {
-    vec as *mut Vec<u8> as *mut std::os::raw::c_void
+    (vec as *mut Vec<u8>).cast()
 }
 
 #[cfg(test)]
@@ -44,7 +44,7 @@ mod tests {
     #[test]
     fn test_callback_get_vec_u8() {
         let mut ret: Vec<u8> = Vec::new();
-        let start: *const std::os::raw::c_char = b"helloGARBAGE".as_ptr() as *const i8;
+        let start: *const std::os::raw::c_char = b"helloGARBAGE".as_ptr().cast();
         let n: std::os::raw::c_uint = 5;
         let user_data: *mut std::os::raw::c_void =
             &mut ret as *mut Vec<u8> as *mut std::os::raw::c_void;
