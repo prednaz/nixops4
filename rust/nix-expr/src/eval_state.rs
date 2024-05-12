@@ -19,7 +19,7 @@ use std::ptr::NonNull;
 lazy_static! {
     static ref INIT: Result<()> = {
         unsafe {
-            raw::GC_allow_register_threads();
+            raw::GC_allow_register_threads(); // why?
         }
         let context: Context = Context::new();
         unsafe {
@@ -47,7 +47,7 @@ pub struct RealisedString {
 pub struct EvalState {
     eval_state: NonNull<raw::EvalState>,
     store: Store,
-    context: Context,
+    context: Context, // not thread safe, is it?
 }
 impl EvalState {
     pub fn new(store: Store) -> Result<Self> {
@@ -117,16 +117,18 @@ impl EvalState {
     }
     pub fn require_int(&self, v: &Value) -> Result<Int> {
         let t = self.value_type(v).unwrap();
+        // surely, `nix_get_int` is performing this check itself, is it not?
         if t != ValueType::Int {
             bail!("expected an int, but got a {:?}", t);
         }
         let i = unsafe { raw::nix_get_int(self.context.ptr(), v.raw_ptr()) };
+        self.context.check_err().unwrap();
         Ok(i)
     }
     /// Evaluate, and require that the value is an attrset.
     /// Returns a list of the keys in the attrset.
     pub fn require_attrs_names(&self, v: &Value) -> Result<Vec<String>> {
-        let t = self.value_type(v)?;
+        let t = self.value_type(v).unwrap();
         if t != ValueType::AttrSet {
             bail!("expected an attrset, but got a {:?}", t);
         }
@@ -166,7 +168,7 @@ impl EvalState {
 
     /// Evaluate, require that the value is an attrset, and select an attribute by name.
     pub fn require_attrs_select_opt(&self, v: &Value, attr_name: &str) -> Result<Option<Value>> {
-        let t = self.value_type(v)?;
+        let t = self.value_type(v).unwrap();
         if t != ValueType::AttrSet {
             bail!("expected an attrset, but got a {:?}", t);
         }
@@ -220,7 +222,7 @@ impl EvalState {
                 self.context.ptr(),
                 value.raw_ptr(),
                 Some(callback_get_vec_u8),
-                &mut raw_buffer as *mut Vec<u8> as *mut std::ffi::c_void,
+                &mut raw_buffer as *mut Vec<u8> as *mut std::ffi::c_void, // `callback_get_vec_u8_data`
             )
         };
         self.context.check_err()?;
@@ -267,12 +269,20 @@ impl EvalState {
             let mut paths = Vec::with_capacity(n as usize);
             for i in 0..n {
                 let path = raw::nix_realised_string_get_store_path(rs, i);
+                // `nix_store_path_clone` can actually be avoided. `RealisedString::paths` cannot be copied and therefore
+                // only lives as long as `RealisedString`. so we just have to give `RealisedString` ownership of the raw realized string.
+                // however, this only works if we can prevent `RealisedString::paths` from being moved via a partial move.
+                // can this be achieved by making `RealisedString::paths` private?
+                // an alternative, potentially less hacky solution would be creating a `RealisedStringRef` owning the raw realized string
+                // and have all `StorePaths` share ownership of a `RealisedStringRef` via `Rc`s.
+                // edit: there is the problem with this that `StorePath::drop` will then be called although it should not.
                 paths.push(StorePath::new_raw_clone(path));
             }
             paths
         };
 
         Ok(RealisedString { s, paths })
+        // `rs` leaks.
     }
 
     /// Eagerly apply a function to an argument.
@@ -324,10 +334,6 @@ where
 
 pub fn gc_register_my_thread() -> Result<()> {
     unsafe {
-        let already_done = raw::GC_thread_is_registered();
-        if already_done != 0 {
-            return Ok(());
-        }
         let mut sb: raw::GC_stack_base = raw::GC_stack_base {
             mem_base: 0 as *mut _,
         };
@@ -575,7 +581,7 @@ mod tests {
             es.force(&v).unwrap();
             let r = es.require_string(&v);
             assert!(r.is_err());
-            // TODO: safe print value (like Nix would)
+            // TODO: safe print value (like Nix would).
             assert_eq!(
                 r.unwrap_err().to_string(),
                 "expected a string, but got a Bool"
@@ -633,7 +639,7 @@ mod tests {
             es.force(&v).unwrap();
             let t = es.value_type(&v).unwrap();
             assert!(t == ValueType::String);
-            // TODO
+            // TODO.
             // let r = es.require_string_without_context(&v);
             // assert!(r.is_err());
             // assert!(r.unwrap_err().to_string().contains("unexpected context"));
@@ -786,7 +792,7 @@ mod tests {
             let f = es.eval_from_string("x: x + 1", "<test>").unwrap();
             let a = es.eval_from_string("2", "<test>").unwrap();
             let v = es.call(f, a).unwrap();
-            es.force(&v).unwrap();
+            es.force(&v).unwrap(); // why?!
             let t = es.value_type(&v).unwrap();
             assert!(t == ValueType::Int);
             let i = es.require_int(&v).unwrap();

@@ -2,7 +2,7 @@ use nix_c_raw as raw;
 use nix_util::context::Context;
 use std::ptr::NonNull;
 
-// TODO: test: cloning a thunk does not duplicate the evaluation.
+// TODO: test: cloning a thunk does not duplicate the evaluation..
 
 pub type Int = i64;
 
@@ -63,6 +63,7 @@ impl Drop for Value {
             raw::nix_gc_decref(context.ptr(), self.inner.as_ptr());
         }
         // ignore error from context, because drop should not panic
+        // https://doc.rust-lang.org/std/ops/trait.Drop.html#panics
     }
 }
 impl Clone for Value {

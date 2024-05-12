@@ -32,7 +32,7 @@ mod tests {
         let start: *const std::os::raw::c_char = std::ptr::null();
         let n: std::os::raw::c_uint = 0;
         let user_data: *mut std::os::raw::c_void =
-            &mut ret as *mut Vec<u8> as *mut std::os::raw::c_void;
+            &mut ret as *mut Vec<u8> as *mut std::os::raw::c_void; // `callback_get_vec_u8_data`
 
         unsafe {
             callback_get_vec_u8(start, n, user_data);
@@ -47,7 +47,7 @@ mod tests {
         let start: *const std::os::raw::c_char = b"helloGARBAGE".as_ptr().cast();
         let n: std::os::raw::c_uint = 5;
         let user_data: *mut std::os::raw::c_void =
-            &mut ret as *mut Vec<u8> as *mut std::os::raw::c_void;
+            &mut ret as *mut Vec<u8> as *mut std::os::raw::c_void; // `callback_get_vec_u8_data`
 
         unsafe {
             callback_get_vec_u8(start, n, user_data);

@@ -18,6 +18,7 @@ lazy_static! {
     };
 }
 
+// why?
 struct StoreRef {
     inner: NonNull<raw::Store>,
 }
@@ -37,7 +38,7 @@ impl Drop for StoreRef {
 pub struct Store {
     inner: StoreRef,
     /* An error context to reuse. This way we don't have to allocate them for each store operation. */
-    context: Context,
+    context: Context, // not thread safe, is it?
 }
 impl Store {
     pub fn open(url: &str) -> Result<Self> {
